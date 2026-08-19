@@ -35,14 +35,17 @@ class CRxSweepFeature : public CUnknown, public IRxApplicationAddInServer
     IRxApplicationAddInSite *m_pSite;
     Application *m_pApplication;
 
-    CButtonDefEvents* m_pButtonEvents1{ nullptr };
+	CButtonDefEvents* m_pButtonEvents1{ nullptr };
 	CButtonDefEvents* m_pButtonEvents2{ nullptr };
+	CButtonDefEvents* m_pButtonEvents3{ nullptr };
 	
 	ButtonDefinitionObjectPtr m_pBtnDef1;
 	ButtonDefinitionObjectPtr m_pBtnDef2;
+	ButtonDefinitionObjectPtr m_pBtnDef3;
 	
 	DWORD m_btnDefCookie1;
 	DWORD m_btnDefCookie2;
+	DWORD m_btnDefCookie3;
 
 
   public:
@@ -84,9 +87,11 @@ class CRxSweepFeature : public CUnknown, public IRxApplicationAddInServer
 
 	HRESULT CreateSweepFeature();
 	HRESULT CreateISection();
+	HRESULT CreateRungSection();
 	void CreateCommands();
 	void CreateSweepCommand();
 	void CreateISectionCommand();
+	void CreateRungSectionCommand();
 };
 
 class CButtonDefEvents : public CCmdTarget

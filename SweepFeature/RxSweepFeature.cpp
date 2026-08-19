@@ -11,10 +11,12 @@
 #include "rxSweepFeature.h"
 #include "SweepFeature.h"
 #include "AfxCtl.h"
+#include <cmath>
 
 // The addin wizard adds command id definitions here.
 #define CMD_CreateSweepFeature			0
 #define CMD_CreateISection				1
+#define CMD_CreateRungSection			2
 
 /*--------------------- IUnknown-interface related implementation  --------------------------------*/
 
@@ -52,9 +54,11 @@ CRxSweepFeature::CRxSweepFeature () : CUnknown (NULL)
   m_pSite = NULL;
   m_pButtonEvents1 = new CButtonDefEvents(this, CMD_CreateSweepFeature);
   m_pButtonEvents2 = new CButtonDefEvents(this, CMD_CreateISection);
+  m_pButtonEvents3 = new CButtonDefEvents(this, CMD_CreateRungSection);
 
   m_btnDefCookie1 = 0;
   m_btnDefCookie2 = 0;
+  m_btnDefCookie3 = 0;
 
   ::IncrementObjectCount();
 }
@@ -72,8 +76,12 @@ CRxSweepFeature::~CRxSweepFeature()
   if(m_pButtonEvents2)
 	delete m_pButtonEvents2;
 
+  if(m_pButtonEvents3)
+	delete m_pButtonEvents3;
+
   m_pBtnDef1 = NULL;
   m_pBtnDef2 = NULL;
+  m_pBtnDef3 = NULL;
 
   ::DecrementObjectCount();
 }
@@ -141,8 +149,17 @@ HRESULT CRxSweepFeature::Deactivate ()
 		m_btnDefCookie2 = 0;
 	}
 
+	if(m_btnDefCookie3)
+	{
+		AfxConnectionUnadvise(m_pBtnDef3, DIID_ButtonDefinitionSink,
+							  m_pButtonEvents3->GetInterface(&IID_IUnknown),
+							  TRUE, m_btnDefCookie3);
+		m_btnDefCookie3 = 0;
+	}
+
 	m_pBtnDef1 = NULL;
 	m_pBtnDef2 = NULL;
+	m_pBtnDef3 = NULL;
 
 
 	// Cleanup up of interfaces supplied by Autodesk Inventor (R) and held on by this AddIn 
@@ -174,6 +191,9 @@ HRESULT CRxSweepFeature::ExecuteCommand (long CommandID)
       break;
     case CMD_CreateISection:
       Result = CreateISection();
+      break;
+    case CMD_CreateRungSection:
+      Result = CreateRungSection();
       break;
     default:
       Result = E_NOTIMPL;
@@ -551,10 +571,161 @@ HRESULT CRxSweepFeature::CreateISection()
 	return S_OK;
 }
 
+HRESULT CRxSweepFeature::CreateRungSection()
+{
+	// Inventor database lengths are centimeters.  These proportional defaults
+	// reproduce the black rung section in the reference image; the gray support
+	// geometry is intentionally omitted.
+	const double sectionLength = 20.0;
+
+	CComBSTR templateFilename;
+	HRESULT hr = m_pApplication->GetTemplateFile(kPartDocumentObject,
+		kDefaultSystemOfMeasure, kDefault_DraftingStandard, CComVariant(),
+		&templateFilename);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<Documents> pDocs;
+	hr = m_pApplication->get_Documents(&pDocs);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<Document> pDocument;
+	hr = pDocs->Add(kPartDocumentObject, templateFilename, VARIANT_TRUE, &pDocument);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComQIPtr<PartDocument> pPartDocument(pDocument);
+	CComPtr<PartComponentDefinition> pPartDef;
+	hr = pPartDocument->get_ComponentDefinition(&pPartDef);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<PlanarSketches> pSketches;
+	hr = pPartDef->get_Sketches(&pSketches);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<WorkPlanes> pWorkPlanes;
+	hr = pPartDef->get_WorkPlanes(&pWorkPlanes);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<WorkPlane> pXYPlane;
+	hr = pWorkPlanes->get_Item(CComVariant(3), &pXYPlane);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<PlanarSketch> pSketch;
+	hr = pSketches->Add(pXYPlane, false, &pSketch);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<TransientGeometry> pTrGeom;
+	hr = m_pApplication->get_TransientGeometry(&pTrGeom);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<SketchLines> pLines;
+	hr = pSketch->get_SketchLines(&pLines);
+	OnErrorReturn(FAILED(hr), hr);
+
+	// Clockwise outer loop.  Extra points at the flange tips and around the hub
+	// give the section the rounded proportions visible in the reference.
+	const double outer[][2] = {
+		{ 0.60,  2.70}, { 3.80,  2.70}, { 4.15,  2.78}, { 4.30,  3.00},
+		{ 4.15,  3.22}, { 3.80,  3.30}, {-3.80,  3.30}, {-4.15,  3.22},
+		{-4.30,  3.00}, {-4.15,  2.78}, {-3.80,  2.70}, {-0.60,  2.70},
+		{-0.60,  1.70}, {-1.25,  1.30}, {-1.65,  0.75}, {-1.80,  0.00},
+		{-1.65, -0.75}, {-1.25, -1.30}, {-0.60, -1.70}, {-0.60, -2.70},
+		{-3.80, -2.70}, {-4.15, -2.78}, {-4.30, -3.00}, {-4.15, -3.22},
+		{-3.80, -3.30}, { 3.80, -3.30}, { 4.01, -3.21}, { 4.10, -3.00},
+		{ 4.01, -2.79}, { 3.80, -2.70}, { 0.60, -2.70}, { 0.60, -1.70},
+		{ 1.25, -1.30}, { 1.65, -0.75}, { 1.80,  0.00}, { 1.65,  0.75},
+		{ 1.25,  1.30}, { 0.60,  1.70}
+	};
+	const int outerCount = sizeof(outer) / sizeof(outer[0]);
+	CComPtr<Point2d> outerPoints[38];
+	for (int i = 0; i < outerCount; ++i)
+	{
+		hr = pTrGeom->CreatePoint2d(outer[i][0], outer[i][1], &outerPoints[i]);
+		OnErrorReturn(FAILED(hr), hr);
+	}
+	CComPtr<SketchLine> pFirstOuter;
+	CComPtr<SketchLine> pPrevious;
+	hr = pLines->AddByTwoPoints(outerPoints[0], outerPoints[1], &pFirstOuter);
+	OnErrorReturn(FAILED(hr), hr);
+	pPrevious = pFirstOuter;
+	for (int i = 1; i < outerCount - 1; ++i)
+	{
+		CComPtr<SketchPoint> pStart;
+		hr = pPrevious->get_EndSketchPoint(&pStart);
+		OnErrorReturn(FAILED(hr), hr);
+		CComPtr<SketchLine> pLine;
+		hr = pLines->AddByTwoPoints(pStart, outerPoints[i + 1], &pLine);
+		OnErrorReturn(FAILED(hr), hr);
+		pPrevious = pLine;
+	}
+	CComPtr<SketchPoint> pOuterEnd;
+	hr = pPrevious->get_EndSketchPoint(&pOuterEnd);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<SketchPoint> pOuterStart;
+	hr = pFirstOuter->get_StartSketchPoint(&pOuterStart);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<SketchLine> pOuterClosingLine;
+	hr = pLines->AddByTwoPoints(pOuterEnd, pOuterStart, &pOuterClosingLine);
+	OnErrorReturn(FAILED(hr), hr);
+
+	// Ten alternating radii form a five-lobed, pentagonal central opening.
+	const int holeCount = 10;
+	const double pi = 3.14159265358979323846;
+	CComPtr<Point2d> holePoints[holeCount];
+	for (int i = 0; i < holeCount; ++i)
+	{
+		double angle = (pi / 2.0) - (2.0 * pi * i / holeCount);
+		double radius = (i % 2 == 0) ? 1.02 : 0.88;
+		hr = pTrGeom->CreatePoint2d(radius * std::cos(angle), radius * std::sin(angle),
+			&holePoints[i]);
+		OnErrorReturn(FAILED(hr), hr);
+	}
+	CComPtr<SketchLine> pFirstHole;
+	CComPtr<SketchLine> pPreviousHole;
+	hr = pLines->AddByTwoPoints(holePoints[0], holePoints[1], &pFirstHole);
+	OnErrorReturn(FAILED(hr), hr);
+	pPreviousHole = pFirstHole;
+	for (int i = 1; i < holeCount - 1; ++i)
+	{
+		CComPtr<SketchPoint> pStart;
+		hr = pPreviousHole->get_EndSketchPoint(&pStart);
+		OnErrorReturn(FAILED(hr), hr);
+		CComPtr<SketchLine> pLine;
+		hr = pLines->AddByTwoPoints(pStart, holePoints[i + 1], &pLine);
+		OnErrorReturn(FAILED(hr), hr);
+		pPreviousHole = pLine;
+	}
+	CComPtr<SketchPoint> pHoleEnd;
+	hr = pPreviousHole->get_EndSketchPoint(&pHoleEnd);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<SketchPoint> pHoleStart;
+	hr = pFirstHole->get_StartSketchPoint(&pHoleStart);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<SketchLine> pHoleClosingLine;
+	hr = pLines->AddByTwoPoints(pHoleEnd, pHoleStart, &pHoleClosingLine);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<Profiles> pProfiles;
+	hr = pSketch->get_Profiles(&pProfiles);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<Profile> pProfile;
+	hr = pProfiles->AddForSolid(VARIANT_TRUE, vtMissing, vtMissing, &pProfile);
+	OnErrorReturn(FAILED(hr), hr);
+
+	CComPtr<PartFeatures> pFeatures;
+	hr = pPartDef->get_Features(&pFeatures);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<ExtrudeFeatures> pExtrudes;
+	hr = pFeatures->get_ExtrudeFeatures(&pExtrudes);
+	OnErrorReturn(FAILED(hr), hr);
+	CComPtr<ExtrudeFeature> pExtrude;
+	hr = pExtrudes->AddByDistanceExtent(pProfile, CComVariant(sectionLength),
+		kPositiveExtentDirection, kJoinOperation, CComVariant(0.0), &pExtrude);
+	OnErrorReturn(FAILED(hr), hr);
+
+	return S_OK;
+}
+
 void CRxSweepFeature::CreateCommands()
 {
 	CreateSweepCommand();
 	CreateISectionCommand();
+	CreateRungSectionCommand();
 }
 
 
@@ -652,6 +823,41 @@ void CRxSweepFeature::CreateISectionCommand()
 	ATLASSERT(bAdvised == TRUE);
 
 	hr = m_pBtnDef2->AutoAddToGUI();
+	ATLASSERT(SUCCEEDED(hr));
+}
+
+void CRxSweepFeature::CreateRungSectionCommand()
+{
+	ATLASSERT(m_pApplication);
+	if (!m_pApplication)
+		return;
+
+	CComPtr<CommandManager> pCommandMgr;
+	HRESULT hr = m_pApplication->get_CommandManager(&pCommandMgr);
+	ATLASSERT(SUCCEEDED(hr));
+	CComPtr<ControlDefinitions> pCtrlDefs;
+	hr = pCommandMgr->get_ControlDefinitions(&pCtrlDefs);
+	ATLASSERT(SUCCEEDED(hr));
+
+	CComVariant vtAddInId(_T("{2CDA1EC9-A800-4606-AA31-FCC77D8E3CA0}"));
+	CComVariant vtEmpty;
+	CComBSTR internalName(_T("SweepFeatureAddIn.CreateRungSectionCmd"));
+	CComBSTR displayName(_T("CreateRungSection"));
+	CComBSTR description(_T("Execute Create Rung Section Command"));
+	CComBSTR tooltip(_T("Create Rung Section"));
+
+	hr = pCtrlDefs->AddButtonDefinition(displayName, internalName, kQueryOnlyCmdType,
+		vtAddInId, description, tooltip, vtEmpty, vtEmpty, kAlwaysDisplayText,
+		&m_pBtnDef3);
+	ATLASSERT(SUCCEEDED(hr));
+	if (!m_pBtnDef3)
+		return;
+
+	m_pBtnDef3->put_Enabled(VARIANT_TRUE);
+	BOOL bAdvised = AfxConnectionAdvise(m_pBtnDef3, DIID_ButtonDefinitionSink,
+		m_pButtonEvents3->GetInterface(&IID_IUnknown), TRUE, &m_btnDefCookie3);
+	ATLASSERT(bAdvised == TRUE);
+	hr = m_pBtnDef3->AutoAddToGUI();
 	ATLASSERT(SUCCEEDED(hr));
 }
 
